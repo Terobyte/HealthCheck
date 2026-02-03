@@ -1,14 +1,20 @@
 # HealthCheck Project Requirements
-# Установите с помощью: pip install -r requirements.txt
+# Install with: pip install -r requirements.txt
 
-# Мониторинг системы
+# System monitoring
 psutil>=5.9.0
 
-# HTTP запросы для Telegram
+# HTTP requests for Telegram
 requests>=2.31.0
 
 # Google Gemini AI SDK
 google-genai>=0.3.0
 
-# Управление переменными окружения
+# Environment variable management
 python-dotenv>=1.0.0
+
+# Modern GUI framework (replacing Tkinter)
+flet>=0.21.0
+
+# Build tool for Windows executable
+pyinstaller>=6.0.0

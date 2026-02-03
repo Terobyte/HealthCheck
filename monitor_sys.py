@@ -11,46 +11,54 @@ import urllib.request
 import json
 
 def get_gateway():
-    gateway=None
+    """
+    Get the default gateway IP address.
+    Works on both Windows and macOS.
+    """
+    gateway = None
     os_type = platform.system()
     try:
-            if os_type == "Darwin":  # MAC OS
-                output = subprocess.check_output("route -n get default", shell=True, text=True)
-                match = re.search(r"gateway:\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", output)
-                if match:
-                    gateway = match.group(1)
+        if os_type == "Darwin":  # MAC OS
+            output = subprocess.check_output("route -n get default", shell=True, text=True)
+            match = re.search(r"gateway:\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", output)
+            if match:
+                gateway = match.group(1)
 
-            elif os_type == "Windows":  # WINDOWS
-                # Команда 'ipconfig' (нужна кодировка cp866 для русской винды, но cp1252/utf-8 для английской)
-                # Мы используем 'chcp 65001' чтобы заставить винду говорить на UTF-8 временно
-                command = "chcp 65001 && ipconfig"
-                output = subprocess.check_output(command, shell=True, text=True)
+        elif os_type == "Windows":  # WINDOWS
+            # The 'ipconfig' command (needs cp866 encoding for Russian Windows, but cp1252/utf-8 for English)
+            # We use 'chcp 65001' to force Windows to speak UTF-8 temporarily
+            command = "chcp 65001 && ipconfig"
+            output = subprocess.check_output(command, shell=True, text=True)
 
-                # Ищем "Default Gateway . . . : 1.2.3.4" или "Основной шлюз . . . : 1.2.3.4"
-                # Регулярка ищет паттерн IP после слов Gateway/шлюз
-                # Мы берем последний найденный IP, так как ipconfig выводит много адаптеров,
-                # но активный шлюз обычно имеет IP, а непустые строки
-                matches = re.findall(r"(?:Gateway|шлюз).*?:\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", output,
-                                     re.IGNORECASE)
-                if matches:
-                    gateway = matches[-1]  # Часто нужный шлюз последний в блоке активного адаптера
+            # Search for "Default Gateway . . . : 1.2.3.4" or "Основной шлюз . . . : 1.2.3.4"
+            # Regex finds IP pattern after Gateway/шлюз words
+            # We take the last found IP, as ipconfig outputs many adapters,
+            # but the active gateway usually has an IP
+            matches = re.findall(r"(?:Gateway|шлюз).*?:\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", output,
+                                 re.IGNORECASE)
+            if matches:
+                gateway = matches[-1]  # Often the needed gateway is last in the active adapter block
 
     except Exception:
-            pass  # Если что-то сломалось, вернем None
+        pass  # If something breaks, return None
 
     return gateway
 
 def find_real_interface_offline():
+    """
+    Find the real network interface when offline.
+    Filters out virtual, loopback, and other non-physical interfaces.
+    """
     stats = psutil.net_if_stats()
     addrs = psutil.net_if_addrs()
 
-    # 1. ЕДИНЫЙ ЧЕРНЫЙ СПИСОК (Объединили всё в кучу)
-    # Если название содержит хоть одно из этих слов - в мусорку.
+    # 1. UNIFIED BLACKLIST (Combined everything)
+    # If the name contains any of these words - discard it.
     stop_words = [
-        'loopback', 'virtual', 'pseudo', 'tunnel', 'vmware', 'box',  # Windows мусор
-        'bluetooth', 'hyper-v', 'wsl',  # Еще Windows
-        'utun', 'awdl', 'llw', 'gif', 'stf', 'ap1',  # Mac мусор
-        'docker', 'veth', 'br-', 'bridge'  # Linux мусор
+        'loopback', 'virtual', 'pseudo', 'tunnel', 'vmware', 'box',  # Windows junk
+        'bluetooth', 'hyper-v', 'wsl',  # More Windows
+        'utun', 'awdl', 'llw', 'gif', 'stf', 'ap1',  # Mac junk
+        'docker', 'veth', 'br-', 'bridge'  # Linux junk
     ]
 
     candidates = []
@@ -58,16 +66,16 @@ def find_real_interface_offline():
     for name, stat in stats.items():
         name_lower = name.lower()
 
-        # --- ФИЛЬТР 1: Включен? ---
+        # --- FILTER 1: Is it up? ---
         if not stat.isup:
             continue
 
-            # --- ФИЛЬТР 2: Точное совпадение (для коротких имен) ---
-        # Исключаем 'lo' и 'lo0' (Linux/Mac Loopback), чтобы не фильтровать "Local Area..."
+        # --- FILTER 2: Exact match (for short names) ---
+        # Exclude 'lo' and 'lo0' (Linux/Mac Loopback) to avoid filtering "Local Area..."
         if name_lower in ['lo', 'lo0']:
             continue
 
-        # --- ФИЛЬТР 3: Поиск стоп-слов ---
+        # --- FILTER 3: Search for stop words ---
         is_junk = False
         for word in stop_words:
             if word in name_lower:
@@ -76,12 +84,12 @@ def find_real_interface_offline():
         if is_junk:
             continue
 
-        # --- ФИЛЬТР 4: Наличие IP ---
-        # Если интерфейс прошел все проверки, проверяем, есть ли у него IP
+        # --- FILTER 4: Has IP? ---
+        # If interface passed all checks, check if it has an IP
         if name in addrs:
             for addr in addrs[name]:
                 if addr.family == socket.AF_INET:  # IPv4
-                    # Дополнительная защита от 127.0.0.1
+                    # Extra protection against 127.0.0.1
                     if not addr.address.startswith('127.'):
                         candidates.append({
                             'IP': addr.address,
@@ -89,30 +97,33 @@ def find_real_interface_offline():
                         })
                     break
 
-                    # Возвращаем первого кандидата (обычно это и есть основной)
+                    # Return first candidate (usually the main one)
     return candidates[0] if candidates else None
 
 
 def ping_host(ip):
     """
-    Возвращает True, если IP отвечает.
-    Возвращает False, если IP молчит.
+    Returns True if IP responds.
+    Returns False if IP is silent.
     """
-    # Определяем параметры для Windows (-n) или Mac/Linux (-c)
+    # Determine parameters for Windows (-n) or Mac/Linux (-c)
     param = '-n' if platform.system().lower() == 'windows' else '-c'
 
-    # Команда: ping -c 1 192.168.1.1
+    # Command: ping -c 1 192.168.1.1
     command = ['ping', param, '1', ip]
 
     try:
-        # check_call запускает команду. Если пинг успешный - возвращает 0 (ОК).
-        # stdout=subprocess.DEVNULL скрывает вывод текста в консоль (чтобы не мусорить)
+        # check_call runs the command. If ping is successful - returns 0 (OK).
+        # stdout=subprocess.DEVNULL hides text output to console (to avoid clutter)
         subprocess.check_call(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except subprocess.CalledProcessError:
         return False
 
 def get_public_data():
+    """
+    Get public IP and location data from ip-api.com
+    """
     try:
         with urllib.request.urlopen("http://ip-api.com/json/", timeout=3) as url:
             data = json.loads(url.read().decode())
@@ -129,62 +140,60 @@ def get_public_data():
 
 def get_true_ping():
     """
-    Запускает системный пинг и вытаскивает точное время в мс.
-    Работает и на Windows, и на Mac.
+    Run system ping and extract exact time in ms.
+    Works on both Windows and Mac.
     """
     host = "8.8.8.8"
     param = '-n' if platform.system().lower() == 'windows' else '-c'
     command = ['ping', param, '1', host]
 
     try:
-        # Запускаем пинг и ловим его вывод (текст)
+        # Run ping and capture its output (text)
         output = subprocess.check_output(command, stderr=subprocess.STDOUT).decode(
             'cp866' if platform.system() == 'Windows' else 'utf-8')
 
-        # Ищем число после "time=" или "время="
-        # Регулярка ловит: time=14ms, time=14.5 ms, время=14мс
+        # Search for number after "time=" or "время="
+        # Regex catches: time=14ms, time=14.5 ms, время=14мс
         match = re.search(r'(?:time|время)[=<]\s*([\d\.]+)', output, re.IGNORECASE)
 
         if match:
-            return float(match.group(1))  # Возвращаем чистое число (например, 14.5)
+            return float(match.group(1))  # Return pure number (e.g., 14.5)
         else:
             return "N/A"
     except:
         return "Error"
 
 
-# ... (другие функции выше)
-
 def check_speed():
     """
-    Быстрый тест скорости через Cloudflare.
-    Добавлена маскировка под браузер (User-Agent) для обхода ошибки 403.
-    Добавлен игнор SSL для Mac.
+    Quick speed test via Cloudflare.
+    Added browser masking (User-Agent) to bypass 403 error.
+    Added SSL ignore for Mac.
     """
     result = {'Ping': 0, 'Speed_Mbps': 0}
 
-    # 1. ЧЕСТНЫЙ ПИНГ
+    # 1. REAL PING
     result['Ping'] = get_true_ping()
 
-    # 2. ТЕСТ СКОРОСТИ
+    # 2. SPEED TEST
     try:
-        # Настройки для обхода защиты
+        # Settings to bypass protection
         url = "https://speed.cloudflare.com/__down?bytes=10485760"  # 10 MB
 
-        # Маскируемся под обычный Chrome на Windows/Mac
+        # Mask as regular Chrome on Windows/Mac
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
 
-        # Игнорируем SSL ошибки (для Mac)
+        # Ignore SSL errors (for Mac)
         ssl_context = ssl._create_unverified_context()
 
-        # Создаем запрос с заголовками
+        # Create request with headers
         req = urllib.request.Request(url, headers=headers)
 
         start = time.time()
 
-        # Выполняем запрос
+        # Execute request
         with urllib.request.urlopen(req, timeout=15, context=ssl_context) as resp:
             data = resp.read()
             size = len(data)
@@ -200,7 +209,7 @@ def check_speed():
     except Exception as e:
         print(f"Cloudflare Speedtest Error: {e}")
 
-        # ЗАПАСНОЙ ВАРИАНТ (Если Cloudflare все равно блокирует)
+        # BACKUP OPTION (If Cloudflare still blocks)
         try:
             print("Trying backup server...")
             url_backup = "http://ipv4.download.thinkbroadband.com/10MB.zip"
@@ -214,117 +223,113 @@ def check_speed():
             result['Speed_Mbps'] = "Error"
 
     return result
+
 def quickcheck():
-    report={}
-    now=datetime.now()
-    report["Time"]=now.strftime("%H:%M:%S")
+    """
+    Perform quick system check and generate report.
+    """
+    report = {}
+    now = datetime.now()
+    report["Time"] = now.strftime("%H:%M:%S")
     report['Hostname'] = socket.gethostname()
 
-    report['OS']=platform.system()
+    report['OS'] = platform.system()
 
-    uptimesec=time.time()-psutil.boot_time()
-    report["Uptime"]={}
+    uptimesec = time.time() - psutil.boot_time()
+    report["Uptime"] = {}
     report["Uptime"]['Hours'] = int(uptimesec // 3600)
     report['Uptime']["Days"] = int((uptimesec // 3600) // 24)
+    
     if report['OS'] == "Windows":
         path = "C://"
     else:
         path = "/System/Volumes/Data" if os.path.exists("/System/Volumes/Data") else "/"
-    report['Disk']={
-        'Total':round(psutil.disk_usage(path).total/(1024**3),1),
-        'Used':round(psutil.disk_usage(path).total/(1024**3)-psutil.disk_usage(path).free/(1024**3),1),
-         'Percent':int(psutil.disk_usage(path).percent)
-
+        
+    report['Disk'] = {
+        'Total': round(psutil.disk_usage(path).total/(1024**3), 1),
+        'Used': round(psutil.disk_usage(path).total/(1024**3)-psutil.disk_usage(path).free/(1024**3), 1),
+         'Percent': int(psutil.disk_usage(path).percent)
     }
+    
     mem = psutil.virtual_memory()
-    report['RAM']={
-      "Total":round(mem.total/(1024**3),1),
-       "Used":round((mem.total-mem.available)/(1024**3),1),
-        "Percent":int(mem.percent)
+    report['RAM'] = {
+      "Total": round(mem.total/(1024**3), 1),
+       "Used": round((mem.total-mem.available)/(1024**3), 1),
+        "Percent": int(mem.percent)
     }
-    report['Network']={}
+    
+    report['Network'] = {}
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
-        report['Network']['Status']=True
+        report['Network']['Status'] = True
         local_ip = s.getsockname()[0]
-        report['Network']['IP']=local_ip
+        report['Network']['IP'] = local_ip
         report['Network']['Interface'] = "Unknown"
         addrs = psutil.net_if_addrs()
         for name, addr_list in addrs.items():
             for addr in addr_list:
-                # Сравниваем IP интерфейса с тем, который мы получили от сокета
+                # Compare interface IP with the one we got from socket
                 if addr.address == local_ip:
                     report['Network']['Interface'] = name
-                    break  # Нашли! Прерываем внутренний цикл
+                    break  # Found! Break inner loop
 
-            # Если нашли (имя уже не Unknown), прерываем внешний цикл
+            # If found (name is not Unknown), break outer loop
             if report['Network']['Interface'] != "Unknown":
                 break
 
-
     except OSError:
-        report['Network']['Status']=False
-        offline_data=find_real_interface_offline()
+        report['Network']['Status'] = False
+        offline_data = find_real_interface_offline()
         if offline_data:
             report['Network'].update(offline_data)
         else:
-            report["Network"]["IP"]="Offline"
-            report["Network"]["Interface"]="Unknown"
+            report["Network"]["IP"] = "Offline"
+            report["Network"]["Interface"] = "Unknown"
+            
     current_ip = str(report['Network'].get('IP', 'Offline'))
     if current_ip not in ["Offline", "None"]:
         if current_ip.startswith("169.254"):
-            report["Network"]['DHCP']=False
-        else: report["Network"]['DHCP']=True
+            report["Network"]['DHCP'] = False
+        else: 
+            report["Network"]['DHCP'] = True
     else:
-        report["Network"]['DHCP']=False
-    if report['Network']["Status"]==False and report['Network']["DHCP"]==True:
-        gateway=get_gateway()
+        report["Network"]['DHCP'] = False
+        
+    if report['Network']["Status"] == False and report['Network']["DHCP"] == True:
+        gateway = get_gateway()
         if gateway:
-            report["Network"]['Gateway']=gateway
+            report["Network"]['Gateway'] = gateway
             if ping_host(gateway):
                 report['Network']['Gateway_Status'] = True
             else:
                 report['Network']['Gateway_Status'] = False
         else:
-            report["Network"]['Gateway']='Unknown'
-            report["Network"]['Gateway_Status']=False
+            report["Network"]['Gateway'] = 'Unknown'
+            report["Network"]['Gateway_Status'] = False
     else:
-        report["Network"]['Gateway']='No Need'
-        report["Network"]['Gateway_Status']='No Need'
-    if report['Network']["Status"]==True:
-        pub_data=(get_public_data())
+        report["Network"]['Gateway'] = 'No Need'
+        report["Network"]['Gateway_Status'] = 'No Need'
+        
+    if report['Network']["Status"] == True:
+        pub_data = get_public_data()
         if pub_data:
             report['Network']['Public_IP'] = pub_data['IP']
             full_location = f"{pub_data['City']}, {pub_data['State']}, {pub_data['Country']}"
             report['Network']['Location'] = full_location
             report['Network']['ISP'] = pub_data['ISP']
-            speed=check_speed()
+            speed = check_speed()
             report['Network']['Speed'] = speed
         else:
             report['Network']['Public_IP'] = "API Error"
             report['Network']['Location'] = "Unknown"
             report['Network']['ISP'] = "Unknown"
     else:
-      report["Network"]['Public_IP']='Unknown'
-      report['Network']['Location']='Unknown'
-      report["Network"]['ISP']='Unknown'
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        report["Network"]['Public_IP'] = 'Unknown'
+        report['Network']['Location'] = 'Unknown'
+        report["Network"]['ISP'] = 'Unknown'
 
     return report
 
-print(quickcheck())
+# Test code (commented out in production)
+# print(quickcheck())
